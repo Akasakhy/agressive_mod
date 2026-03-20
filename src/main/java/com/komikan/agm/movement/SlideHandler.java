@@ -66,7 +66,6 @@ public class SlideHandler {
         if (state != null && state.phase != SlidePhase.IDLE)    return;
         if (!player.isSprinting() || !player.onGround())        return;
 
-        // アクティブなコンボウィンドウがあれば倍率を取得
         double comboMult = getActiveCombMult(uuid);
 
         Vec3 lookDir = player.getLookAngle();
@@ -79,11 +78,12 @@ public class SlideHandler {
         newState.comboMult = comboMult;
         slideStates.put(uuid, newState);
 
-        player.setForcedPose(Pose.SWIMMING);
+        // setForcedPose ではなく setPose を使う（DATAパラメータ経由で両側に正しく同期）
+        player.setPose(Pose.SWIMMING);
         player.setSprinting(false);
         Vec3 cur = player.getDeltaMovement();
         player.setDeltaMovement(dir.x * SLIDE_INITIAL_SPEED * comboMult, cur.y,
-                                dir.z * SLIDE_INITIAL_SPEED * comboMult);
+                dir.z * SLIDE_INITIAL_SPEED * comboMult);
         player.hurtMarked = true;
 
         AggressiveMovementMod.LOGGER.debug("スライド開始 (コンボ{}倍): {}",
@@ -178,7 +178,6 @@ public class SlideHandler {
     @SubscribeEvent
     public static void onLivingJump(LivingEvent.LivingJumpEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
-        // サーバー側のみ処理（クライアント側の二重発火区防止）
         if (player.level().isClientSide()) return;
 
         UUID       uuid  = player.getUUID();
@@ -186,7 +185,6 @@ public class SlideHandler {
         if (state == null) return;
         if (state.phase != SlidePhase.SLIDING && state.phase != SlidePhase.EXITING) return;
 
-        // 現在の水平速度を引き継ぐ
         Vec3   cur        = player.getDeltaMovement();
         double horizSpeed = Math.sqrt(cur.x * cur.x + cur.z * cur.z);
         double launch     = Math.max(horizSpeed, SPRINT_SPEED);
@@ -194,23 +192,20 @@ public class SlideHandler {
         player.setDeltaMovement(state.dirX * launch, SLIDE_JUMP_BOOST, state.dirZ * launch);
         player.hurtMarked = true;
 
-        player.setForcedPose(null);
+        // setForcedPose(null) は不要。空中になるのでバニラが FALL_FLYING 等を判定する
         player.setSprinting(true);
 
-        // 即クールダウン
         state.phase        = SlidePhase.COOLDOWN;
         state.cooldownTicks = SLIDE_COOLDOWN;
 
-        // ---- コンボ準備: 着地待ちに次の倍率を登録 ----
-        // 現在のアクティブコンボ倍率 + INCREMENT を次コンボ倍率として保存
         ComboState activeCombo = comboStates.get(uuid);
         double currentMult  = (activeCombo != null) ? activeCombo.multiplier : 1.0;
         double nextMult     = Math.min(currentMult + COMBO_INCREMENT, COMBO_MAX_MULT);
         pendingLandingCombo.put(uuid, nextMult);
 
         AggressiveMovementMod.LOGGER.debug(
-            "スライドジャンプ: speed={}, 次コンボ待ち={}倍", launch,
-            String.format("%.1f", nextMult));
+                "スライドジャンプ: speed={}, 次コンボ待ち={}倍", launch,
+                String.format("%.1f", nextMult));
     }
 
     // =========================================================
@@ -228,7 +223,6 @@ public class SlideHandler {
             return;
         }
 
-        // 速度カーブ（コンボ倍率を乗算）
         double targetSpeed;
         if (state.slideTicks <= 5) {
             double t = state.slideTicks / 5.0;
@@ -238,7 +232,6 @@ public class SlideHandler {
             targetSpeed  = SLIDE_HOLD_SPEED * decay * state.comboMult;
         }
 
-        // 方向を毎tick更新（lerp）
         Vec3   lookDir = player.getLookAngle();
         Vec3   dir     = new Vec3(lookDir.x, 0, lookDir.z).normalize();
         double lerp    = 0.25;
@@ -250,13 +243,15 @@ public class SlideHandler {
         Vec3 cur = player.getDeltaMovement();
         player.setDeltaMovement(state.dirX * targetSpeed, cur.y, state.dirZ * targetSpeed);
         player.hurtMarked = true;
-        player.setForcedPose(Pose.SWIMMING);
+        // 毎tick setPose(SWIMMING) を呼ぶことでスライド姿勢を維持
+        // バニラの updatePlayerPose() がEND前に STANDING を設定しても上書き
+        player.setPose(Pose.SWIMMING);
     }
 
     private static void tickExiting(Player player, SlideState state, UUID uuid) {
-        // 空中に出た → 即クールダウン（ジャンプ対応）
         if (!player.onGround()) {
-            player.setForcedPose(null);
+            // 空中 → クールダウンへ。setForcedPose(null) は不要。
+            // バニラの updatePlayerPose() が次tick以降に適切なポーズを設定する
             player.setSprinting(true);
             state.phase        = SlidePhase.COOLDOWN;
             state.cooldownTicks = SLIDE_COOLDOWN;
@@ -269,10 +264,11 @@ public class SlideHandler {
         Vec3   cur = player.getDeltaMovement();
         player.setDeltaMovement(state.dirX * blendSpeed, cur.y, state.dirZ * blendSpeed);
         player.hurtMarked = true;
-        player.setForcedPose(Pose.SWIMMING);
+        player.setPose(Pose.SWIMMING);
 
         if (state.exitTicks >= EXIT_PHASE_TICKS) {
-            player.setForcedPose(null);
+            // EXIT完了。setForcedPose(null) を呼ばず、バニラに委ねる。
+            // バニラの updatePlayerPose() が次tick以降に STANDING か SWIMMING（狭い場合）を判定する
             player.setSprinting(true);
             Vec3 last = player.getDeltaMovement();
             player.setDeltaMovement(state.dirX * SPRINT_SPEED, last.y, state.dirZ * SPRINT_SPEED);
@@ -283,8 +279,7 @@ public class SlideHandler {
     }
 
     private static void tickCooldown(Player player, SlideState state, UUID uuid) {
-        if (player.getForcedPose() != null) player.setForcedPose(null);
-
+        // ポーズへの干渉は一切しない。バニラに完全に委ねる。
         state.cooldownTicks--;
         if (state.cooldownTicks <= 0) {
             slideStates.remove(uuid);
