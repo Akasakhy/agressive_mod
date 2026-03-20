@@ -27,31 +27,38 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SlideHandler {
 
     // ---- スライド定数 ----
-    private static final double SLIDE_INITIAL_SPEED = 0.55;
-    private static final double SLIDE_HOLD_SPEED    = 0.38;
-    private static final double SPRINT_SPEED        = 0.26;
-    private static final int    MAX_SLIDE_TICKS     = 40;
-    private static final int    EXIT_PHASE_TICKS    = 8;
-    private static final int    SLIDE_COOLDOWN      = 10;
-    private static final double SLIDE_JUMP_BOOST    = 0.55;
+    private static final double SLIDE_INITIAL_SPEED   = 0.55;
+    private static final double SLIDE_HOLD_SPEED      = 0.38;
+    private static final double SPRINT_SPEED          = 0.26;
+    private static final int    MAX_SLIDE_TICKS       = 40;
+    private static final int    EXIT_PHASE_TICKS      = 8;
+    private static final int    SLIDE_COOLDOWN        = 10;
+
+    /**
+     * スライドジャンプY速度: 現在の水平速度に応じて線形スケール。
+     *   低速（SPRINT_SPEED 以下）→ SLIDE_JUMP_BOOST_MIN
+     *   高速（SLIDE_INITIAL_SPEED * COMBO_MAX_MULT 以上）→ SLIDE_JUMP_BOOST_MAX
+     */
+    private static final double SLIDE_JUMP_BOOST_MIN = 0.35;
+    private static final double SLIDE_JUMP_BOOST_MAX = 0.55;
 
     // ---- コンボ定数 ----
     /** 着地後このtick以内に次のスライドでコンボ成立 */
     private static final int    COMBO_WINDOW_TICKS  = 20;
-    /** 1コンボあたりの倍率加算 */
-    private static final double COMBO_INCREMENT     = 0.2;
+    /** 1コンボあたりの倍率加算（4段階: 1.0 → 1.1 → 1.2 → 1.3 → 1.4） */
+    private static final double COMBO_INCREMENT     = 0.1;
     /** 倍率上限 */
-    private static final double COMBO_MAX_MULT      = 1.8;
+    private static final double COMBO_MAX_MULT      = 1.4;
 
     // ---- 状態マップ ----
     /** スライド状態 */
-    private static final Map<UUID, SlideState>  slideStates        = new ConcurrentHashMap<>();
+    private static final Map<UUID, SlideState>  slideStates         = new ConcurrentHashMap<>();
     /** 着地待ちコンボ倍率（スライドジャンプ後、まだ空中にいる間） */
     private static final Map<UUID, Double>      pendingLandingCombo = new ConcurrentHashMap<>();
     /** アクティブなコンボ（着地済み、ウィンドウカウントダウン中） */
-    private static final Map<UUID, ComboState>  comboStates        = new ConcurrentHashMap<>();
+    private static final Map<UUID, ComboState>  comboStates         = new ConcurrentHashMap<>();
     /** 前tickにプレイヤーが空中だったか（着地の瞬間を検知するため） */
-    private static final Map<UUID, Boolean>     wasAirborne        = new ConcurrentHashMap<>();
+    private static final Map<UUID, Boolean>     wasAirborne         = new ConcurrentHashMap<>();
 
     // =========================================================
     // パブリックAPI
@@ -78,7 +85,6 @@ public class SlideHandler {
         newState.comboMult = comboMult;
         slideStates.put(uuid, newState);
 
-        // setForcedPose ではなく setPose を使う（DATAパラメータ経由で両側に正しく同期）
         player.setPose(Pose.SWIMMING);
         player.setSprinting(false);
         Vec3 cur = player.getDeltaMovement();
@@ -97,7 +103,7 @@ public class SlideHandler {
 
         Vec3 cur = player.getDeltaMovement();
         state.speedAtExitStart = Math.sqrt(cur.x * cur.x + cur.z * cur.z);
-        state.phase    = SlidePhase.EXITING;
+        state.phase     = SlidePhase.EXITING;
         state.exitTicks = 0;
     }
 
@@ -120,11 +126,10 @@ public class SlideHandler {
     @SubscribeEvent
     public static void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
-        // シングルプレイでクライアントエンティティとサーバーエンティティの両方で発火するためサーバー側のみ処理
         if (event.player.level().isClientSide()) return;
 
-        Player player = event.player;
-        UUID   uuid   = player.getUUID();
+        Player player  = event.player;
+        UUID   uuid    = player.getUUID();
         boolean onGround = player.onGround();
 
         // ---- 着地検知: 空中→地面 の遷移のみを捕捉 ----
@@ -133,16 +138,15 @@ public class SlideHandler {
         wasAirborne.put(uuid, !onGround);
 
         if (justLanded) {
-            // 着地した瞬間: 着地待ちコンボがあればウィンドウを開始
             Double pending = pendingLandingCombo.remove(uuid);
             if (pending != null) {
-                ComboState combo   = new ComboState();
-                combo.multiplier   = pending;
-                combo.windowTicks  = COMBO_WINDOW_TICKS;
+                ComboState combo  = new ComboState();
+                combo.multiplier  = pending;
+                combo.windowTicks = COMBO_WINDOW_TICKS;
                 comboStates.put(uuid, combo);
                 AggressiveMovementMod.LOGGER.debug(
-                    "コンボウィンドウ開始 — 倍率{}倍, {}tick",
-                    String.format("%.1f", pending), COMBO_WINDOW_TICKS);
+                        "コンボウィンドウ開始 — 倍率{}倍, {}tick",
+                        String.format("%.1f", pending), COMBO_WINDOW_TICKS);
             }
         }
 
@@ -171,9 +175,10 @@ public class SlideHandler {
     /**
      * スライドジャンプ（SLIDING / EXITING フェーズ中にジャンプ）
      *
-     * 修正: EXITING中のジャンプも受け付け、ポーズ強制によるジャンプ無効化を防ぐ
-     * コンボ: ジャンプ時点で次コンボの倍率を計算し pendingLandingCombo に格納
-     *         → 実際の着地まではカウントダウンを開始しない（着地検知で開始）
+     * Y速度を現在の水平速度に応じてリニアにスケール:
+     *   horizSpeed <= SPRINT_SPEED               → SLIDE_JUMP_BOOST_MIN (0.35)
+     *   horizSpeed >= SLIDE_INITIAL_SPEED * COMBO_MAX_MULT → SLIDE_JUMP_BOOST_MAX (0.55)
+     *   その間は線形補間
      */
     @SubscribeEvent
     public static void onLivingJump(LivingEvent.LivingJumpEvent event) {
@@ -189,22 +194,30 @@ public class SlideHandler {
         double horizSpeed = Math.sqrt(cur.x * cur.x + cur.z * cur.z);
         double launch     = Math.max(horizSpeed, SPRINT_SPEED);
 
-        player.setDeltaMovement(state.dirX * launch, SLIDE_JUMP_BOOST, state.dirZ * launch);
-        player.hurtMarked = true;
+        // 水平速度からジャンプY速度を線形補間
+        // 基準範囲: [SPRINT_SPEED, SLIDE_INITIAL_SPEED * COMBO_MAX_MULT]
+        double speedMin = SPRINT_SPEED;
+        double speedMax = SLIDE_INITIAL_SPEED * COMBO_MAX_MULT; // 0.55 * 1.4 = 0.77
+        double t        = Math.min(1.0, Math.max(0.0,
+                (horizSpeed - speedMin) / (speedMax - speedMin)));
+        double jumpY    = SLIDE_JUMP_BOOST_MIN + t * (SLIDE_JUMP_BOOST_MAX - SLIDE_JUMP_BOOST_MIN);
 
-        // setForcedPose(null) は不要。空中になるのでバニラが FALL_FLYING 等を判定する
+        player.setDeltaMovement(state.dirX * launch, jumpY, state.dirZ * launch);
+        player.hurtMarked = true;
         player.setSprinting(true);
 
-        state.phase        = SlidePhase.COOLDOWN;
+        state.phase         = SlidePhase.COOLDOWN;
         state.cooldownTicks = SLIDE_COOLDOWN;
 
         ComboState activeCombo = comboStates.get(uuid);
-        double currentMult  = (activeCombo != null) ? activeCombo.multiplier : 1.0;
-        double nextMult     = Math.min(currentMult + COMBO_INCREMENT, COMBO_MAX_MULT);
+        double currentMult = (activeCombo != null) ? activeCombo.multiplier : 1.0;
+        double nextMult    = Math.min(currentMult + COMBO_INCREMENT, COMBO_MAX_MULT);
         pendingLandingCombo.put(uuid, nextMult);
 
         AggressiveMovementMod.LOGGER.debug(
-                "スライドジャンプ: speed={}, 次コンボ待ち={}倍", launch,
+                "スライドジャンプ: horizSpeed={}, jumpY={}, 次コンボ待ち={}倍",
+                String.format("%.3f", horizSpeed),
+                String.format("%.3f", jumpY),
                 String.format("%.1f", nextMult));
     }
 
@@ -218,7 +231,7 @@ public class SlideHandler {
         if (state.slideTicks >= MAX_SLIDE_TICKS) {
             Vec3 cur = player.getDeltaMovement();
             state.speedAtExitStart = Math.sqrt(cur.x * cur.x + cur.z * cur.z);
-            state.phase    = SlidePhase.EXITING;
+            state.phase     = SlidePhase.EXITING;
             state.exitTicks = 0;
             return;
         }
@@ -243,17 +256,13 @@ public class SlideHandler {
         Vec3 cur = player.getDeltaMovement();
         player.setDeltaMovement(state.dirX * targetSpeed, cur.y, state.dirZ * targetSpeed);
         player.hurtMarked = true;
-        // 毎tick setPose(SWIMMING) を呼ぶことでスライド姿勢を維持
-        // バニラの updatePlayerPose() がEND前に STANDING を設定しても上書き
         player.setPose(Pose.SWIMMING);
     }
 
     private static void tickExiting(Player player, SlideState state, UUID uuid) {
         if (!player.onGround()) {
-            // 空中 → クールダウンへ。setForcedPose(null) は不要。
-            // バニラの updatePlayerPose() が次tick以降に適切なポーズを設定する
             player.setSprinting(true);
-            state.phase        = SlidePhase.COOLDOWN;
+            state.phase         = SlidePhase.COOLDOWN;
             state.cooldownTicks = SLIDE_COOLDOWN;
             return;
         }
@@ -267,19 +276,16 @@ public class SlideHandler {
         player.setPose(Pose.SWIMMING);
 
         if (state.exitTicks >= EXIT_PHASE_TICKS) {
-            // EXIT完了。setForcedPose(null) を呼ばず、バニラに委ねる。
-            // バニラの updatePlayerPose() が次tick以降に STANDING か SWIMMING（狭い場合）を判定する
             player.setSprinting(true);
             Vec3 last = player.getDeltaMovement();
             player.setDeltaMovement(state.dirX * SPRINT_SPEED, last.y, state.dirZ * SPRINT_SPEED);
             player.hurtMarked = true;
-            state.phase        = SlidePhase.COOLDOWN;
+            state.phase         = SlidePhase.COOLDOWN;
             state.cooldownTicks = SLIDE_COOLDOWN;
         }
     }
 
     private static void tickCooldown(Player player, SlideState state, UUID uuid) {
-        // ポーズへの干渉は一切しない。バニラに完全に委ねる。
         state.cooldownTicks--;
         if (state.cooldownTicks <= 0) {
             slideStates.remove(uuid);
@@ -303,14 +309,14 @@ public class SlideHandler {
     private enum SlidePhase { IDLE, SLIDING, EXITING, COOLDOWN }
 
     private static class SlideState {
-        SlidePhase phase          = SlidePhase.IDLE;
-        int        slideTicks     = 0;
-        int        exitTicks      = 0;
-        int        cooldownTicks  = 0;
-        double     dirX           = 0;
-        double     dirZ           = 0;
+        SlidePhase phase           = SlidePhase.IDLE;
+        int        slideTicks      = 0;
+        int        exitTicks       = 0;
+        int        cooldownTicks   = 0;
+        double     dirX            = 0;
+        double     dirZ            = 0;
         double     speedAtExitStart = 0;
-        double     comboMult      = 1.0;
+        double     comboMult       = 1.0;
     }
 
     private static class ComboState {
