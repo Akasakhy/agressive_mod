@@ -45,5 +45,12 @@ public class ModNetwork {
                 .decoder(WallJumpC2SPacket::new)
                 .consumerMainThread(WallJumpC2SPacket::handle)
                 .add();
+
+        // 壁張り付きパケット（クライアント→サーバー）
+        CHANNEL.messageBuilder(WallClingC2SPacket.class, nextId(), NetworkDirection.PLAY_TO_SERVER)
+                .encoder(WallClingC2SPacket::encode)
+                .decoder(WallClingC2SPacket::new)
+                .consumerMainThread(WallClingC2SPacket::handle)
+                .add();
     }
 }
