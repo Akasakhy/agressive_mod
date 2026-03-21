@@ -6,7 +6,6 @@ import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 
-
 /**
  * ネットワークチャンネル管理
  * C2S / S2C パケットの登録を行う
@@ -32,25 +31,32 @@ public class ModNetwork {
      * 全パケットを登録
      */
     public static void register() {
-        // スライディング開始パケット（クライアント→サーバー）
+        // スライディング（クライアント→サーバー）
         CHANNEL.messageBuilder(SlideC2SPacket.class, nextId(), NetworkDirection.PLAY_TO_SERVER)
                 .encoder(SlideC2SPacket::encode)
                 .decoder(SlideC2SPacket::new)
                 .consumerMainThread(SlideC2SPacket::handle)
                 .add();
 
-        // 壁ジャンプパケット（クライアント→サーバー）
+        // 壁ジャンプ（クライアント→サーバー）
         CHANNEL.messageBuilder(WallJumpC2SPacket.class, nextId(), NetworkDirection.PLAY_TO_SERVER)
                 .encoder(WallJumpC2SPacket::encode)
                 .decoder(WallJumpC2SPacket::new)
                 .consumerMainThread(WallJumpC2SPacket::handle)
                 .add();
 
-        // 壁張り付きパケット（クライアント→サーバー）
+        // 壁張り付き（クライアント→サーバー）
         CHANNEL.messageBuilder(WallClingC2SPacket.class, nextId(), NetworkDirection.PLAY_TO_SERVER)
                 .encoder(WallClingC2SPacket::encode)
                 .decoder(WallClingC2SPacket::new)
                 .consumerMainThread(WallClingC2SPacket::handle)
+                .add();
+
+        // レッジグラブ（クライアント→サーバー）
+        CHANNEL.messageBuilder(LedgeGrabC2SPacket.class, nextId(), NetworkDirection.PLAY_TO_SERVER)
+                .encoder(LedgeGrabC2SPacket::encode)
+                .decoder(LedgeGrabC2SPacket::new)
+                .consumerMainThread(LedgeGrabC2SPacket::handle)
                 .add();
     }
 }
