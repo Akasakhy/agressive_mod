@@ -1,5 +1,11 @@
 {
   "key.agm.slide": "スライディング",
   "key.agm.wall_cling": "壁張り付き",
-  "key.categories.agm": "アグレッシブムーブメント"
+  "key.categories.agm": "アグレッシブムーブメント",
+
+  "item.agm.double_jump_feather": "二段ジャンプの羽",
+  "item.agm.double_jump_feather.tooltip_1": "空中でもう一度ジャンプできるようになる。",
+  "item.agm.double_jump_feather.tooltip_2": "インベントリに入れておくだけで効果が発動する。",
+
+  "itemGroup.agm.agm_tab": "アグレッシブムーブメント"
 }

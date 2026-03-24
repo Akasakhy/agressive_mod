@@ -1,6 +1,7 @@
 package com.komikan.agm.movement;
 
 import com.komikan.agm.AggressiveMovementMod;
+import com.komikan.agm.client.effect.ParticleHelper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
@@ -20,12 +21,14 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 壁ジャンプハンドラ（サーバー側）
  *
+ * ── パーティクル追加分 ─────────────────────────────────────────
+ * tryWallJump() 成功時に ParticleHelper.spawnWallJump() を呼び出す。
+ * 壁法線 (nx, nz) をそのまま渡してリングの向きを壁面に合わせる。
+ *
  * ── 落下ダメージ緩和 ─────────────────────────────────────────────────
  * 壁ジャンプに成功したプレイヤーを walljumpedPlayers に記録する。
  * LivingFallEvent で落下距離を FALL_DISTANCE_BONUS（2.0f）分引くことで、
  * ダメージが発生する落下高さを実質 +2 ブロック延長する。
- * （バニラの無ダメージ限界は 3 ブロック → 壁ジャンプ後は 5 ブロック相当）
- * イベント発火後にフラグをクリアするため、効果は着地1回限り。
  */
 @Mod.EventBusSubscriber(modid = AggressiveMovementMod.MODID)
 public class WallJumpHandler {
@@ -40,18 +43,12 @@ public class WallJumpHandler {
     private static final int    MAX_WALL_JUMPS        = 3;
     private static final int    SAME_WALL_COOLDOWN    = 30;
     private static final int    CACHE_VALID_TICKS     = 6;
-
-    /** 壁ジャンプ後の落下ダメージ免除ブロック数（実効距離からこの値を引く） */
     private static final float  FALL_DISTANCE_BONUS   = 2.0f;
 
     // ---- 状態マップ ----
     private static final Map<UUID, WallJumpState>  states   = new ConcurrentHashMap<>();
     private static final Map<UUID, CachedVelocity> velCache = new ConcurrentHashMap<>();
 
-    /**
-     * 壁ジャンプ後にまだ着地していないプレイヤーのUUIDセット。
-     * 次の LivingFallEvent で落下距離を FALL_DISTANCE_BONUS 分引いた後クリアする。
-     */
     private static final Set<UUID> walljumpedPlayers =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
@@ -134,11 +131,12 @@ public class WallJumpHandler {
         player.hurtMarked = true;
         player.setSprinting(true);
 
-        // 壁張り付き状態をクリア（張り付き中に壁ジャンプした場合の速度上書き防止）
         WallClingHandler.clearState(uuid);
-
-        // 落下ダメージ緩和フラグをセット
         walljumpedPlayers.add(uuid);
+
+        // ── パーティクル: CRIT + SWEEP_ATTACK ─────────────────
+        // 壁法線を渡してリングの向きを壁面に合わせる
+        ParticleHelper.spawnWallJump(player, nx, nz);
 
         state.jumpCount++;
         state.lastNormalX  = nx;
@@ -158,21 +156,13 @@ public class WallJumpHandler {
     // 落下ダメージ緩和
     // =========================================================
 
-    /**
-     * 壁ジャンプ後の着地時に落下距離を FALL_DISTANCE_BONUS 分引く。
-     * これにより落下ダメージが発生する高さが実質 +2 ブロック延長される。
-     * （バニラ: 3ブロック超でダメージ → 壁ジャンプ後: 5ブロック超でダメージ）
-     *
-     * LivingFallEvent は落下ダメージ計算の直前に発火するため、
-     * setDistance() で実効距離を書き換えるだけでダメージ量も変わる。
-     */
     @SubscribeEvent
     public static void onLivingFall(LivingFallEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         if (player.level().isClientSide()) return;
 
         UUID uuid = player.getUUID();
-        if (!walljumpedPlayers.remove(uuid)) return; // フラグなし → 通常着地
+        if (!walljumpedPlayers.remove(uuid)) return;
 
         float originalDistance = event.getDistance();
         float reducedDistance  = Math.max(0.0f, originalDistance - FALL_DISTANCE_BONUS);
@@ -196,7 +186,6 @@ public class WallJumpHandler {
         Player player = event.player;
         UUID   uuid   = player.getUUID();
 
-        // 速度キャッシュ更新
         Vec3   vel        = player.getDeltaMovement();
         double horizX     = vel.x;
         double horizZ     = vel.z;
@@ -213,7 +202,6 @@ public class WallJumpHandler {
             }
         }
 
-        // 壁ジャンプ状態の管理
         WallJumpState state = states.get(uuid);
         if (state == null) return;
 

@@ -1,6 +1,7 @@
 package com.komikan.agm.movement;
 
 import com.komikan.agm.AggressiveMovementMod;
+import com.komikan.agm.client.effect.ParticleHelper;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
@@ -15,6 +16,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * スライディングハンドラ（サーバー側メインロジック）
+ *
+ * ── パーティクル追加分 ─────────────────────────────────────────
+ * ・tryStartSlide()       → ParticleHelper.spawnSlideStart()  (CLOUD リング)
+ * ・tickSliding() 3tick毎 → ParticleHelper.spawnSlideTick()   (CAMPFIRE_SIGNAL_SMOKE トレイル)
+ * ・コンボウィンドウ開始  → ParticleHelper.spawnComboActivate() (FIREWORK バースト)
  *
  * コンボシステムの着地検知:
  *   スライドジャンプ発動 → pendingLandingCombo に倍率を保存
@@ -34,30 +40,18 @@ public class SlideHandler {
     private static final int    EXIT_PHASE_TICKS      = 8;
     private static final int    SLIDE_COOLDOWN        = 10;
 
-    /**
-     * スライドジャンプY速度: 現在の水平速度に応じて線形スケール。
-     *   低速（SPRINT_SPEED 以下）→ SLIDE_JUMP_BOOST_MIN
-     *   高速（SLIDE_INITIAL_SPEED * COMBO_MAX_MULT 以上）→ SLIDE_JUMP_BOOST_MAX
-     */
     private static final double SLIDE_JUMP_BOOST_MIN = 0.35;
     private static final double SLIDE_JUMP_BOOST_MAX = 0.55;
 
     // ---- コンボ定数 ----
-    /** 着地後このtick以内に次のスライドでコンボ成立 */
     private static final int    COMBO_WINDOW_TICKS  = 20;
-    /** 1コンボあたりの倍率加算（4段階: 1.0 → 1.1 → 1.2 → 1.3 → 1.4） */
     private static final double COMBO_INCREMENT     = 0.1;
-    /** 倍率上限 */
     private static final double COMBO_MAX_MULT      = 1.4;
 
     // ---- 状態マップ ----
-    /** スライド状態 */
     private static final Map<UUID, SlideState>  slideStates         = new ConcurrentHashMap<>();
-    /** 着地待ちコンボ倍率（スライドジャンプ後、まだ空中にいる間） */
     private static final Map<UUID, Double>      pendingLandingCombo = new ConcurrentHashMap<>();
-    /** アクティブなコンボ（着地済み、ウィンドウカウントダウン中） */
     private static final Map<UUID, ComboState>  comboStates         = new ConcurrentHashMap<>();
-    /** 前tickにプレイヤーが空中だったか（着地の瞬間を検知するため） */
     private static final Map<UUID, Boolean>     wasAirborne         = new ConcurrentHashMap<>();
 
     // =========================================================
@@ -91,6 +85,9 @@ public class SlideHandler {
         player.setDeltaMovement(dir.x * SLIDE_INITIAL_SPEED * comboMult, cur.y,
                 dir.z * SLIDE_INITIAL_SPEED * comboMult);
         player.hurtMarked = true;
+
+        // ── パーティクル: CLOUD リング ────────────────────────
+        ParticleHelper.spawnSlideStart(player);
 
         AggressiveMovementMod.LOGGER.debug("スライド開始 (コンボ{}倍): {}",
                 String.format("%.1f", comboMult), player.getName().getString());
@@ -144,6 +141,7 @@ public class SlideHandler {
                 combo.multiplier  = pending;
                 combo.windowTicks = COMBO_WINDOW_TICKS;
                 comboStates.put(uuid, combo);
+
                 AggressiveMovementMod.LOGGER.debug(
                         "コンボウィンドウ開始 — 倍率{}倍, {}tick",
                         String.format("%.1f", pending), COMBO_WINDOW_TICKS);
@@ -174,11 +172,6 @@ public class SlideHandler {
 
     /**
      * スライドジャンプ（SLIDING / EXITING フェーズ中にジャンプ）
-     *
-     * Y速度を現在の水平速度に応じてリニアにスケール:
-     *   horizSpeed <= SPRINT_SPEED               → SLIDE_JUMP_BOOST_MIN (0.35)
-     *   horizSpeed >= SLIDE_INITIAL_SPEED * COMBO_MAX_MULT → SLIDE_JUMP_BOOST_MAX (0.55)
-     *   その間は線形補間
      */
     @SubscribeEvent
     public static void onLivingJump(LivingEvent.LivingJumpEvent event) {
@@ -194,10 +187,8 @@ public class SlideHandler {
         double horizSpeed = Math.sqrt(cur.x * cur.x + cur.z * cur.z);
         double launch     = Math.max(horizSpeed, SPRINT_SPEED);
 
-        // 水平速度からジャンプY速度を線形補間
-        // 基準範囲: [SPRINT_SPEED, SLIDE_INITIAL_SPEED * COMBO_MAX_MULT]
         double speedMin = SPRINT_SPEED;
-        double speedMax = SLIDE_INITIAL_SPEED * COMBO_MAX_MULT; // 0.55 * 1.4 = 0.77
+        double speedMax = SLIDE_INITIAL_SPEED * COMBO_MAX_MULT;
         double t        = Math.min(1.0, Math.max(0.0,
                 (horizSpeed - speedMin) / (speedMax - speedMin)));
         double jumpY    = SLIDE_JUMP_BOOST_MIN + t * (SLIDE_JUMP_BOOST_MAX - SLIDE_JUMP_BOOST_MIN);
@@ -257,6 +248,11 @@ public class SlideHandler {
         player.setDeltaMovement(state.dirX * targetSpeed, cur.y, state.dirZ * targetSpeed);
         player.hurtMarked = true;
         player.setPose(Pose.SWIMMING);
+
+        // ── パーティクル: CAMPFIRE_SIGNAL_SMOKE トレイル (3tick毎) ──
+        if (state.slideTicks % 3 == 0) {
+            ParticleHelper.spawnSlideTick(player);
+        }
     }
 
     private static void tickExiting(Player player, SlideState state, UUID uuid) {
@@ -296,7 +292,6 @@ public class SlideHandler {
     // コンボヘルパー
     // =========================================================
 
-    /** アクティブなコンボ倍率を返す（コンボがなければ 1.0） */
     private static double getActiveCombMult(UUID uuid) {
         ComboState combo = comboStates.get(uuid);
         return (combo != null) ? combo.multiplier : 1.0;

@@ -1,5 +1,7 @@
 package com.komikan.agm;
 
+import com.komikan.agm.item.ModCreativeTabs;
+import com.komikan.agm.item.ModItems;
 import com.komikan.agm.network.ModNetwork;
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.common.MinecraftForge;
@@ -11,7 +13,6 @@ import org.slf4j.Logger;
 
 /**
  * Aggressive Movement Mod メインクラス
- * アクションゲームのような爽快な動きを追加するモッド
  */
 @Mod(AggressiveMovementMod.MODID)
 public class AggressiveMovementMod {
@@ -22,6 +23,12 @@ public class AggressiveMovementMod {
     public AggressiveMovementMod(FMLJavaModLoadingContext context) {
         IEventBus modEventBus = context.getModEventBus();
 
+        // アイテム登録
+        ModItems.ITEMS.register(modEventBus);
+
+        // クリエイティブタブ登録
+        ModCreativeTabs.CREATIVE_MODE_TABS.register(modEventBus);
+
         // 共通セットアップ
         modEventBus.addListener(this::commonSetup);
 
@@ -29,9 +36,6 @@ public class AggressiveMovementMod {
         MinecraftForge.EVENT_BUS.register(this);
     }
 
-    /**
-     * 共通セットアップ — ネットワークチャンネル登録
-     */
     private void commonSetup(final FMLCommonSetupEvent event) {
         event.enqueueWork(() -> {
             ModNetwork.register();

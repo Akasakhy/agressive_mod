@@ -9,6 +9,13 @@ import net.minecraftforge.network.simple.SimpleChannel;
 /**
  * ネットワークチャンネル管理
  * C2S / S2C パケットの登録を行う
+ *
+ * ── パケット一覧 ────────────────────────────────────────────────
+ *  0: SlideC2SPacket       スライド開始 / 終了
+ *  1: WallJumpC2SPacket    壁ジャンプ
+ *  2: WallClingC2SPacket   壁張り付き 開始 / 解除
+ *  3: LedgeGrabC2SPacket   レッジグラブ GRAB / CLIMB / RELEASE
+ *  4: DoubleJumpC2SPacket  二段ジャンプ
  */
 public class ModNetwork {
 
@@ -29,6 +36,7 @@ public class ModNetwork {
 
     /**
      * 全パケットを登録
+     * ※ packetId はインクリメントするため登録順を変えないこと。
      */
     public static void register() {
         // スライディング（クライアント→サーバー）
@@ -58,5 +66,14 @@ public class ModNetwork {
                 .decoder(LedgeGrabC2SPacket::new)
                 .consumerMainThread(LedgeGrabC2SPacket::handle)
                 .add();
+
+        // 二段ジャンプ（クライアント→サーバー）
+        CHANNEL.messageBuilder(DoubleJumpC2SPacket.class, nextId(), NetworkDirection.PLAY_TO_SERVER)
+                .encoder(DoubleJumpC2SPacket::encode)
+                .decoder(DoubleJumpC2SPacket::new)
+                .consumerMainThread(DoubleJumpC2SPacket::handle)
+                .add();
+
+        AggressiveMovementMod.LOGGER.info("AGM ネットワーク登録完了 ({} パケット)", packetId);
     }
 }

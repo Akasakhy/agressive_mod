@@ -1,5 +1,11 @@
 {
   "key.agm.slide": "Slide",
   "key.agm.wall_cling": "Wall Cling",
-  "key.categories.agm": "Aggressive Movement"
+  "key.categories.agm": "Aggressive Movement",
+
+  "item.agm.double_jump_feather": "Double Jump Feather",
+  "item.agm.double_jump_feather.tooltip_1": "Grants the ability to jump again in mid-air.",
+  "item.agm.double_jump_feather.tooltip_2": "Keep it in your inventory to use.",
+
+  "itemGroup.agm.agm_tab": "Aggressive Movement"
 }
